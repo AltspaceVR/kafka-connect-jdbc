@@ -53,7 +53,7 @@ public class TimestampIncrementingOffset {
       map.put(INCREMENTING_FIELD, incrementingOffset);
     if (timestampOffset != null) {
       map.put(TIMESTAMP_FIELD, timestampOffset.getTime());
-      map.put(TIMESTAMP_NANOS_FIELD, timestampOffset.getNanos());
+      map.put(TIMESTAMP_NANOS_FIELD, (long)timestampOffset.getNanos());
     }
     return map;
   }
@@ -67,9 +67,9 @@ public class TimestampIncrementingOffset {
     Timestamp ts = null;
     if (millis != null) {
       ts = new Timestamp(millis);
-      Integer nanos = (Integer) map.get(TIMESTAMP_NANOS_FIELD);
+      Long nanos = (Long) map.get(TIMESTAMP_NANOS_FIELD);
       if (nanos != null)
-          ts.setNanos(nanos);
+          ts.setNanos(nanos.intValue());
     }
     return new TimestampIncrementingOffset(ts, incr);
   }
