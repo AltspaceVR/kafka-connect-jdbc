@@ -46,9 +46,6 @@ public class JdbcSourceTask extends SourceTask {
 
   private static final Logger log = LoggerFactory.getLogger(JdbcSourceTask.class);
 
-  static final String INCREMENTING_FIELD = "incrementing";
-  static final String TIMESTAMP_FIELD = "timestamp";
-
   private Time time;
   private JdbcSourceTaskConfig config;
   private Connection db;
@@ -179,10 +176,6 @@ public class JdbcSourceTask extends SourceTask {
       }
 
       Map<String, Object> offset = offsets == null ? null : offsets.get(partition);
-      Long incrementingOffset = offset == null ? null :
-                              (Long) offset.get(INCREMENTING_FIELD);
-      Long timestampOffset = offset == null ? null :
-                             (Long) offset.get(TIMESTAMP_FIELD);
 
       String topicPrefix = config.getString(JdbcSourceTaskConfig.TOPIC_PREFIX_CONFIG);
 
@@ -190,14 +183,14 @@ public class JdbcSourceTask extends SourceTask {
         tableQueue.add(new BulkTableQuerier(queryMode, tableOrQuery, topicPrefix, keyColumn));
       } else if (mode.equals(JdbcSourceTaskConfig.MODE_INCREMENTING)) {
         tableQueue.add(new TimestampIncrementingTableQuerier(
-            queryMode, tableOrQuery, topicPrefix, keyColumn, null, null, incrementingColumn, incrementingColumnUsePrimaryKey, incrementingOffset, timestampDelayInterval));
+            queryMode, tableOrQuery, topicPrefix, keyColumn, null, incrementingColumn, incrementingColumnUsePrimaryKey, offset, timestampDelayInterval));
       } else if (mode.equals(JdbcSourceTaskConfig.MODE_TIMESTAMP)) {
         tableQueue.add(new TimestampIncrementingTableQuerier(
-            queryMode, tableOrQuery, topicPrefix, keyColumn, timestampColumn, timestampOffset, null, false, null, timestampDelayInterval));
+            queryMode, tableOrQuery, topicPrefix, keyColumn, timestampColumn, null, false, offset, timestampDelayInterval));
       } else if (mode.endsWith(JdbcSourceTaskConfig.MODE_TIMESTAMP_INCREMENTING)) {
         tableQueue.add(new TimestampIncrementingTableQuerier(
-            queryMode, tableOrQuery, topicPrefix, keyColumn, timestampColumn, timestampOffset,
-            incrementingColumn, incrementingColumnUsePrimaryKey, incrementingOffset, timestampDelayInterval));
+            queryMode, tableOrQuery, topicPrefix, keyColumn, timestampColumn,
+            incrementingColumn, incrementingColumnUsePrimaryKey, offset, timestampDelayInterval));
       }
     }
 

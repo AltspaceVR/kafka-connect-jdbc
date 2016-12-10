@@ -28,9 +28,7 @@ import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.util.Calendar;
 import java.util.Collections;
-import java.util.Date;
 import java.util.GregorianCalendar;
-import java.util.HashMap;
 import java.util.Map;
 import java.util.TimeZone;
 
@@ -57,21 +55,19 @@ public class TimestampIncrementingTableQuerier extends TableQuerier {
   private static final Calendar UTC_CALENDAR = new GregorianCalendar(TimeZone.getTimeZone("UTC"));
 
   private String timestampColumn;
-  private Long timestampOffset;
   private String incrementingColumn;
   private boolean incrementingColumnUsePrimaryKey;
-  private Long incrementingOffset = null;
   private long timestampDelay;
+  private TimestampIncrementingOffset offset;
 
   public TimestampIncrementingTableQuerier(QueryMode mode, String name, String topicPrefix, String keyColumnName,
-                                           String timestampColumn, Long timestampOffset,
-                                           String incrementingColumn, boolean incrementingColumnUsePrimaryKey, Long incrementingOffset, Long timestampDelay) {
+                       String timestampColumn, String incrementingColumn, boolean incrementingColumnUsePrimaryKey,
+                       Map<String, Object> offsetMap, Long timestampDelay) {
     super(mode, name, topicPrefix, keyColumnName);
     this.timestampColumn = timestampColumn;
-    this.timestampOffset = timestampOffset;
-    this.incrementingOffset = incrementingOffset;
-    this.timestampDelay = timestampDelay;
     this.incrementingColumn = incrementingColumn;
+    this.timestampDelay = timestampDelay;
+    this.offset = TimestampIncrementingOffset.fromMap(offsetMap);
     this.incrementingColumnUsePrimaryKey = incrementingColumnUsePrimaryKey;
   }
 
@@ -157,25 +153,29 @@ public class TimestampIncrementingTableQuerier extends TableQuerier {
   @Override
   protected ResultSet executeQuery() throws SQLException {
     if (incrementingColumn != null && timestampColumn != null) {
-      Timestamp startTime = new Timestamp(timestampOffset == null ? 0 : timestampOffset);
+      Timestamp tsOffset = offset.getTimestampOffset();
+      Long incOffset = offset.getIncrementingOffset();
       Timestamp endTime = new Timestamp(JdbcUtils.getCurrentTimeOnDB(stmt.getConnection(), UTC_CALENDAR).getTime() - timestampDelay);
       stmt.setTimestamp(1, endTime, UTC_CALENDAR);
-      stmt.setTimestamp(2, startTime, UTC_CALENDAR);
-      stmt.setLong(3, (incrementingOffset == null ? -1 : incrementingOffset));
-      stmt.setTimestamp(4, startTime, UTC_CALENDAR);
-      log.debug("Executing prepared statement with start time value = " + timestampOffset + " (" + startTime.toString() + ") "
-              + " end time " + endTime.toString()
-              + " and incrementing value = " + incrementingOffset);
+      stmt.setTimestamp(2, tsOffset, UTC_CALENDAR);
+      stmt.setLong(3, incOffset);
+      stmt.setTimestamp(4, tsOffset, UTC_CALENDAR);
+      log.debug("Executing prepared statement with start time value = {} end time = {} and incrementing value = {}",
+          JdbcUtils.formatUTC(tsOffset),
+          JdbcUtils.formatUTC(endTime),
+          incOffset);
     } else if (incrementingColumn != null) {
-      stmt.setLong(1, (incrementingOffset == null ? -1 : incrementingOffset));
-      log.debug("Executing prepared statement with incrementing value = " + incrementingOffset);
+      Long incOffset = offset.getIncrementingOffset();
+      stmt.setLong(1, incOffset);
+      log.debug("Executing prepared statement with incrementing value = {}", incOffset);
     } else if (timestampColumn != null) {
-      Timestamp startTime = new Timestamp(timestampOffset == null ? 0 : timestampOffset);
+      Timestamp tsOffset = offset.getTimestampOffset();
       Timestamp endTime = new Timestamp(JdbcUtils.getCurrentTimeOnDB(stmt.getConnection(), UTC_CALENDAR).getTime() - timestampDelay);
-      stmt.setTimestamp(1, startTime, UTC_CALENDAR);
+      stmt.setTimestamp(1, tsOffset, UTC_CALENDAR);
       stmt.setTimestamp(2, endTime, UTC_CALENDAR);
-      log.debug("Executing prepared statement with timestamp value = " + timestampOffset + " (" + JdbcUtils.formatUTC(startTime) + ") "
-              + " end time " + JdbcUtils.formatUTC(endTime));
+      log.debug("Executing prepared statement with timestamp value = {} end time = {}",
+          JdbcUtils.formatUTC(tsOffset),
+          JdbcUtils.formatUTC(endTime));
     }
     return stmt.executeQuery();
   }
@@ -183,9 +183,9 @@ public class TimestampIncrementingTableQuerier extends TableQuerier {
   @Override
   public SourceRecord extractRecord() throws SQLException {
     Struct record = DataConverter.convertRecord(valueSchema, resultSet);
-    Map<String, Long> offset = new HashMap<>();
+    Long id = null;
+    Timestamp latest = null;
     if (incrementingColumn != null) {
-      Long id;
       switch (valueSchema.field(incrementingColumn).schema().type()) {
         case INT32:
           id = (long) (Integer) record.get(incrementingColumn);
@@ -195,24 +195,20 @@ public class TimestampIncrementingTableQuerier extends TableQuerier {
           break;
         default:
           throw new ConnectException("Invalid type for incrementing column: "
-                                            + valueSchema.field(incrementingColumn).schema().type());
+              + valueSchema.field(incrementingColumn).schema().type());
       }
 
       // If we are only using an incrementing column, then this must be incrementing. If we are also
       // using a timestamp, then we may see updates to older rows.
-      assert (incrementingOffset == null || id > incrementingOffset) || timestampColumn != null;
-      incrementingOffset = id;
-
-      offset.put(JdbcSourceTask.INCREMENTING_FIELD, id);
+      long incrementingOffset = offset.getIncrementingOffset();
+      assert (incrementingOffset == -1 || id > incrementingOffset) || timestampColumn != null;
     }
-
-
     if (timestampColumn != null) {
-      Date timestamp = (Date) record.get(timestampColumn);
-      assert timestampOffset == null || timestamp.getTime() >= timestampOffset;
-      timestampOffset = timestamp.getTime();
-      offset.put(JdbcSourceTask.TIMESTAMP_FIELD, timestampOffset);
+      latest = (Timestamp) record.get(timestampColumn);
+      Timestamp timestampOffset = offset.getTimestampOffset();
+      assert timestampOffset != null && timestampOffset.compareTo(latest) <= 0;
     }
+    offset = new TimestampIncrementingOffset(latest, id);
 
     // TODO: Key?
     final String topic;
@@ -224,7 +220,7 @@ public class TimestampIncrementingTableQuerier extends TableQuerier {
         break;
       case QUERY:
         partition = Collections.singletonMap(JdbcSourceConnectorConstants.QUERY_NAME_KEY,
-                                             JdbcSourceConnectorConstants.QUERY_NAME_VALUE);
+            JdbcSourceConnectorConstants.QUERY_NAME_VALUE);
         topic = topicPrefix;
         break;
       default:
@@ -235,21 +231,21 @@ public class TimestampIncrementingTableQuerier extends TableQuerier {
       Object key = record.get(keyColumn);
 
       if (key != null) {
-        return new SourceRecord(partition, offset, topic, keySchema, key, record.schema(), record);
+        return new SourceRecord(partition, offset.toMap(), topic, keySchema, key, record.schema(), record);
       }
     }
 
-    return new SourceRecord(partition, offset, topic, record.schema(), record);
+    return new SourceRecord(partition, offset.toMap(), topic, record.schema(), record);
   }
 
   @Override
   public String toString() {
     return "TimestampIncrementingTableQuerier{" +
-           "name='" + name + '\'' +
-           ", query='" + query + '\'' +
-           ", topicPrefix='" + topicPrefix + '\'' +
-           ", timestampColumn='" + timestampColumn + '\'' +
-           ", incrementingColumn='" + incrementingColumn + '\'' +
-           '}';
+        "name='" + name + '\'' +
+        ", query='" + query + '\'' +
+        ", topicPrefix='" + topicPrefix + '\'' +
+        ", timestampColumn='" + timestampColumn + '\'' +
+        ", incrementingColumn='" + incrementingColumn + '\'' +
+        '}';
   }
 }

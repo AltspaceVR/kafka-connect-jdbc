@@ -67,6 +67,7 @@ public class JdbcSourceTaskLifecycleTest extends JdbcSourceTaskTestBase {
 
     DatabaseMetaData dbMetadata = PowerMock.createMock(DatabaseMetaData.class);
     dbMetadata.getPrimaryKeys(null, null, "test");
+    dbMetadata.getTables(null, null, "test", null);
     PowerMock.expectLastCall().andReturn(pkResultSet);
 
     // Should request a connection, then should close it on stop()
