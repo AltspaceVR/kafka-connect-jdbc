@@ -53,7 +53,7 @@ public class TimestampIncrementingOffset {
       map.put(INCREMENTING_FIELD, incrementingOffset);
     if (timestampOffset != null) {
       map.put(TIMESTAMP_FIELD, timestampOffset.getTime());
-      map.put(TIMESTAMP_NANOS_FIELD, (long)timestampOffset.getNanos());
+      map.put(TIMESTAMP_NANOS_FIELD, (long) timestampOffset.getNanos());
     }
     return map;
   }
